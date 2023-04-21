@@ -2,8 +2,8 @@
 #
 # Max-Planck-Gesellschaft zur Förderung der Wissenschaften e.V. (MPG) is
 # holder of all proprietary rights on this computer program.
-# Using this computer program means that you agree to the terms 
-# in the LICENSE file included with this software distribution. 
+# Using this computer program means that you agree to the terms
+# in the LICENSE file included with this software distribution.
 # Any use not explicitly granted by the LICENSE is prohibited.
 #
 # Copyright©2019 Max-Planck-Gesellschaft zur Förderung
@@ -21,10 +21,11 @@ from scipy.io import savemat
 import argparse
 from tqdm import tqdm
 import torch
+import copy
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from decalib.deca import DECA
-from decalib.datasets import datasets 
+from decalib.datasets import datasets
 from decalib.utils import util
 from decalib.utils.config import cfg as deca_cfg
 from decalib.utils.tensor_cropper import transform_points
@@ -36,7 +37,7 @@ def main(args):
     device = args.device
     os.makedirs(savefolder, exist_ok=True)
 
-    # load test images 
+    # load test images
     testdata = datasets.TestData(args.inputpath, iscrop=args.iscrop, face_detector=args.detector, sample_step=args.sample_step)
 
     # run DECA
@@ -50,17 +51,27 @@ def main(args):
         images = testdata[i]['image'].to(device)[None,...]
         with torch.no_grad():
             codedict = deca.encode(images)
+            codedict['bbox'] = testdata[i]['bbox']
             opdict, visdict = deca.decode(codedict) #tensor
             if args.render_orig:
                 tform = testdata[i]['tform'][None, ...]
                 tform = torch.inverse(tform).transpose(1,2).to(device)
                 original_image = testdata[i]['original_image'][None, ...].to(device)
-                _, orig_visdict = deca.decode(codedict, render_orig=True, original_image=original_image, tform=tform)    
-                orig_visdict['inputs'] = original_image            
+                opdict, orig_visdict = deca.decode(codedict, render_orig=True, original_image=original_image, tform=tform)
+                orig_visdict['inputs'] = original_image
 
         if args.saveDepth or args.saveKpt or args.saveObj or args.saveMat or args.saveImages:
             os.makedirs(os.path.join(savefolder, name), exist_ok=True)
         # -- save results
+        if args.saveRawOutput:
+            raw_output_dict = copy.deepcopy(codedict)
+            del(raw_output_dict["images"])
+            raw_output_dict["landmarks2d"] = opdict["landmarks2d"]
+            raw_output_dict["landmarks3d"] = opdict["landmarks3d"]
+            raw_output_dict["landmarks3d_world"] = opdict["landmarks3d_world"]
+            os.makedirs(os.path.join(savefolder, name), exist_ok=True)
+            np.save(os.path.join(savefolder, name, name + '_output.npy'), raw_output_dict)
+            # np.save(os.path.join(savefolder, name, name + '_output.npy'), {**codedict, **opdict})
         if args.saveDepth:
             depth_image = deca.render.render_depth(opdict['trans_verts']).repeat(1,3,1,1)
             visdict['depth_images'] = depth_image
@@ -87,7 +98,7 @@ def main(args):
                     image = util.tensor2image(orig_visdict[vis_name][0])
                     cv2.imwrite(os.path.join(savefolder, name, 'orig_' + name + '_' + vis_name +'.jpg'), util.tensor2image(orig_visdict[vis_name][0]))
     print(f'-- please check the results in {savefolder}')
-        
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='DECA: Detailed Expression Capture and Animation')
 
@@ -128,4 +139,6 @@ if __name__ == '__main__':
                         help='whether to save outputs as .mat' )
     parser.add_argument('--saveImages', default=False, type=lambda x: x.lower() in ['true', '1'],
                         help='whether to save visualization output as seperate images' )
+    parser.add_argument('--saveRawOutput', default=False, type=lambda x: x.lower() in ['true', '1'],
+                        help='whether to save raw output of the network' )
     main(parser.parse_args())
